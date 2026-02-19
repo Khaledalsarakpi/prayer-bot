@@ -1,0 +1,12 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.db
+data/users.json
+data/users.db
+output.log
+bot.log
+models/
+*.egg-info/
