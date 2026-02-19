@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.log
+*.db
+.env
+data/users.json
+data/users.db
+bot.log
+output.log
+models/
+.git/
+.gitignore
