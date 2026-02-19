@@ -3,7 +3,7 @@ import sqlite3
 from datetime import datetime
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, JobQueue, CallbackQueryHandler
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -212,7 +212,9 @@ def format_prayer(city, prayer_name):
     actual_name = name_map.get(prayer_name, prayer_name)
     time = day.get(actual_name, "-")
     remaining = get_remaining(time)
-    return f"🕌 صلاة {actual_name}\n\n⏰ الوقت: {time}\nمتبقي: {remaining}"
+    city_display = CITY_DISPLAY_NAMES.get(city, city)
+    
+    return f"🕌 صلاة {actual_name}\n\n⏰ الوقت: {time} بتوقيت {city_display}\nمتبقي: {remaining}"
 
 
 def format_next_prayer(city):
@@ -223,6 +225,7 @@ def format_next_prayer(city):
         day_index = len(times) - 1
     day = times[day_index]
     now = datetime.now()
+    city_display = CITY_DISPLAY_NAMES.get(city, city)
     
     prayers = [("الفجر", day.get("الفجر", "-")), ("الظهر", day.get("الظهر", "-")), 
                ("العصر", day.get("العصر", "-")), ("المغرب", day.get("المغرب", "-")), 
@@ -233,7 +236,7 @@ def format_next_prayer(city):
             continue
         remaining = get_remaining(time)
         if remaining:
-            return f"⏰ الصلاة القادمة\n\n🕌 صلاة {name}\n\n⏰ الوقت: {time}\nمتبقي: {remaining}"
+            return f"⏰ الصلاة القادمة\n\n🕌 صلاة {name}\n\n⏰ الوقت: {time} بتوقيت {city_display}\nمتبقي: {remaining}"
     
     return "🌙 غداً فجراً"
 
@@ -317,6 +320,162 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 إحصائيات البوت\n\n👥 عدد المشتركين: {count}")
 
 
+CITY_DISPLAY_NAMES = {
+    "ادلب": "إدلب",
+    "حلب": "حلب",
+    "حمص": "حمص",
+    "حماة": "حماة",
+    "دمشق": "دمشق",
+    "اللاذقية": "اللاذقية"
+}
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    user_id = query.from_user.id
+    user = get_user(user_id)
+    city = user[1] if user else "ادلب"
+    
+    if data == "select_city":
+        cities_data = load_city_times.__code__.co_consts
+        import json
+        with open("/root/prayer_bot/data/cities.json", "r", encoding="utf-8") as f:
+            cities = json.load(f)
+        city_keys = list(cities.keys())
+        
+        keyboard = []
+        row = []
+        for i, city_key in enumerate(city_keys):
+            display_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
+            row.append(InlineKeyboardButton(display_name, callback_data=f"city_{city_key}"))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")])
+        
+        await query.edit_message_text(
+            "🏙️ *اختر المدينة:*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    elif data.startswith("city_"):
+        city_key = data.replace("city_", "")
+        times = load_city_times(city_key)
+        if not times:
+            await query.answer("⚠️ تعذر جلب المواقيت", show_alert=True)
+            return
+        
+        day_num = get_ramadan_day(city_key)
+        day_index = day_num - 1
+        if day_index >= len(times):
+            day_index = len(times) - 1
+        day = times[day_index]
+        
+        city_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
+        response = format_times_message_for_callback(day, day_num, city_name)
+        
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏙️ تغيير المدينة", callback_data="select_city")],
+            [InlineKeyboardButton("📅 تصفح الأيام", callback_data="calendar")],
+            [InlineKeyboardButton("🔔 تفعيل التذكير", callback_data="reminder")]
+        ])
+        
+        await query.edit_message_text(response, parse_mode="Markdown", reply_markup=keyboard)
+    
+    elif data == "calendar":
+        keyboard = []
+        row = []
+        for i in range(1, 30):
+            row.append(InlineKeyboardButton(str(i), callback_data=f"day_{i}"))
+            if len(row) == 5:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")])
+        
+        await query.edit_message_text("📅 *اختر يوم Ramadan:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    
+    elif data.startswith("day_"):
+        day_num = int(data.replace("day_", ""))
+        times = load_city_times(city)
+        
+        day_index = day_num - 1
+        if day_index >= len(times):
+            day_index = len(times) - 1
+        day = times[day_index]
+        
+        city_name = CITY_DISPLAY_NAMES.get(city, city)
+        response = format_day_message_callback(day, day_num, city_name)
+        
+        prev_day = day_num - 1 if day_num > 1 else 29
+        next_day = day_num + 1 if day_num < 29 else 1
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("◀", callback_data=f"day_{prev_day}"),
+                InlineKeyboardButton(f"{day_num}/29", callback_data="calendar"),
+                InlineKeyboardButton("▶", callback_data=f"day_{next_day}")
+            ],
+            [InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")]
+        ])
+        
+        await query.edit_message_text(response, parse_mode="Markdown", reply_markup=keyboard)
+
+
+def format_times_message_for_callback(day_data, day_num, city_name):
+    fajr = day_data.get("الفجر", "-")
+    sunrise = day_data.get("الشروق", "-")
+    zuhr = day_data.get("الظهر", "-")
+    asr = day_data.get("العصر", "-")
+    maghrib = day_data.get("المغرب", "-")
+    isha = day_data.get("العشاء", "-")
+    gregorian_date = day_data.get("التاريخ_ميلادي", "")
+    
+    return f"""🌙 *مواقيت الصلاة - مدينة {city_name}*
+═══════════════════════════
+📍 *{city_name} - سوريا*
+📅 *19 فبراير - 19 مارس 2026*
+📆 *شهر رمضان 1447*
+
+┌─────────────────────────────┐
+│  🕌 مواقيت اليوم - رمضـان {day_num}  │
+└─────────────────────────────┘
+
+🌙  الفجر:    {fajr}
+☀️  الشروق:   {sunrise}
+🕐  الظهر:    {zuhr}
+🌅  العصر:    {asr}
+🌇  المغرب:   {maghrib}
+🌃  العشاء:   {isha}
+
+═══════════════════════════"""
+
+
+def format_day_message_callback(day, day_num, city_name):
+    return f"""📅 *رمضان {day_num}*
+{day.get('التاريخ_ميلادي', '')}
+
+┌─────────────────────────────┐
+│         🕌 المواقيت          │
+└─────────────────────────────┘
+
+🌙  الفجر:    {day.get('الفجر', '-')}
+☀️  الشروق:   {day.get('الشروق', '-')}
+🕐  الظهر:    {day.get('الظهر', '-')}
+🌅  العصر:    {day.get('العصر', '-')}
+🌇  المغرب:   {day.get('المغرب', '-')}
+🌃  العشاء:   {day.get('العشاء', '-')}
+
+📍 {city_name}"""
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
@@ -384,6 +543,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_callback))
     print("Bot Running...")
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 

@@ -1,18 +1,39 @@
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, CallbackContext
-from utils.json_loader import load_prayer_times
+from utils.json_loader import load_prayer_times, load_cities, get_city_times
 from utils.time_calc import get_today_data, get_ramadan_day
 
 
-def format_times_message(day_data):
+CITY_DISPLAY_NAMES = {
+    "ادلب": "إدلب",
+    "حلب": "حلب",
+    "حمص": "حمص",
+    "حماة": "حماة",
+    "دمشق": "دمشق",
+    "اللاذقية": "اللاذقية"
+}
+
+CITY_COUNTRIES = {
+    "ادلب": "سوريا",
+    "حلب": "سوريا",
+    "حمص": "سوريا",
+    "حماة": "سوريا",
+    "دمشق": "سوريا",
+    "اللاذقية": "سوريا"
+}
+
+
+def format_times_message(day_data, city_key):
     if not day_data:
         return "⚠️ تعذر جلب المواقيت"
 
     ramadan_day = get_ramadan_day()
+    city_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
+    country = CITY_COUNTRIES.get(city_key, "")
 
-    response = f"""🌙 *مواقيت الصلاة - مدينة إدلب*
+    response = f"""🌙 *مواقيت الصلاة - مدينة {city_name}*
 ═══════════════════════════
-📍 *إدلب - سوريا*
+📍 *{city_name} - {country}*
 📅 *19 فبراير - 19 مارس 2026*
 📆 *شهر رمضان 1447*
 
@@ -32,12 +53,45 @@ def format_times_message(day_data):
     return response
 
 
-async def times_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prayer_times_data = load_prayer_times()
-    day_data = get_today_data(prayer_times_data)
-    response = format_times_message(day_data)
+async def select_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cities = load_cities()
+    city_keys = list(cities.keys())
+    
+    keyboard = []
+    row = []
+    for i, city_key in enumerate(city_keys):
+        display_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
+        row.append(InlineKeyboardButton(display_name, callback_data=f"city_{city_key}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")])
+    
+    await update.message.reply_text(
+        "🏙️ *اختر المدينة:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+async def times_today(update: Update, context: ContextTypes.DEFAULT_TYPE, city_key=None):
+    if city_key is None:
+        await select_city(update, context)
+        return
+    
+    city_times = get_city_times(city_key)
+    if not city_times:
+        await update.message.reply_text("⚠️ تعذر جلب المواقيت لهذه المدينة")
+        return
+    
+    day_data = get_today_data(city_times)
+    response = format_times_message(day_data, city_key)
 
     keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏙️ تغيير المدينة", callback_data="select_city")],
         [InlineKeyboardButton("📅 تصفح الأيام", callback_data="calendar")],
         [InlineKeyboardButton("🔔 تفعيل التذكير", callback_data="reminder")]
     ])
@@ -48,7 +102,50 @@ async def times_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, parse_mode="Markdown", reply_markup=keyboard)
 
 
-def format_day_message(day, day_num):
+async def handle_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, city_key):
+    city_times = get_city_times(city_key)
+    if not city_times:
+        await update.callback_query.answer("⚠️ تعذر جلب المواقيت", show_alert=True)
+        return
+    
+    day_data = get_today_data(city_times)
+    response = format_times_message(day_data, city_key)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🏙️ تغيير المدينة", callback_data="select_city")],
+        [InlineKeyboardButton("📅 تصفح الأيام", callback_data="calendar")],
+        [InlineKeyboardButton("🔔 تفعيل التذكير", callback_data="reminder")]
+    ])
+
+    await update.callback_query.edit_message_text(response, parse_mode="Markdown", reply_markup=keyboard)
+
+
+async def show_city_selector(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cities = load_cities()
+    city_keys = list(cities.keys())
+    
+    keyboard = []
+    row = []
+    for i, city_key in enumerate(city_keys):
+        display_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
+        row.append(InlineKeyboardButton(display_name, callback_data=f"city_{city_key}"))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    
+    keyboard.append([InlineKeyboardButton("🏠 القائمة الرئيسية", callback_data="main_menu")])
+    
+    await update.callback_query.edit_message_text(
+        "🏙️ *اختر المدينة:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+
+def format_day_message(day, day_num, city_key):
+    city_name = CITY_DISPLAY_NAMES.get(city_key, city_key)
     response = f"""📅 *رمضان {day_num}*
 {day.get('التاريخ_ميلادي', '')}
 
@@ -61,7 +158,9 @@ def format_day_message(day, day_num):
 🕐  الظهر:    {day.get('الظهر', '-')}
 🌅  العصر:    {day.get('العصر', '-')}
 🌇  المغرب:   {day.get('المغرب', '-')}
-🌃  العشاء:   {day.get('العشاء', '-')}"""
+🌃  العشاء:   {day.get('العشاء', '-')}
+
+📍 {city_name}"""
 
     return response
 
@@ -81,11 +180,14 @@ async def calendar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("📅 *اختر يوم Ramadan:*", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
-async def show_day(update: Update, context: ContextTypes.DEFAULT_TYPE, day_num):
-    prayer_times_data = load_prayer_times()
-    for day in prayer_times_data:
-        if day.get("اليوم_رمضان") == day_num:
-            response = format_day_message(day, day_num)
+async def show_day(update: Update, context: ContextTypes.DEFAULT_TYPE, day_num, city_key="ادلب"):
+    city_times = get_city_times(city_key)
+    if not city_times:
+        city_times = load_prayer_times()
+    
+    for day in city_times:
+        if day.get("اليوم") == day_num or day.get("اليوم_رمضان") == day_num:
+            response = format_day_message(day, day_num, city_key)
 
             prev_day = day_num - 1 if day_num > 1 else 29
             next_day = day_num + 1 if day_num < 29 else 1

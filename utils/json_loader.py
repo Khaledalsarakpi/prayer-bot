@@ -2,6 +2,7 @@ import json
 import os
 
 DATA_FILE = "/root/prayer_bot/data/prayer_times.json"
+CITIES_FILE = "/root/prayer_bot/data/cities.json"
 
 
 def load_prayer_times():
@@ -10,6 +11,19 @@ def load_prayer_times():
             return json.load(f)
     except Exception:
         return []
+
+
+def load_cities():
+    try:
+        with open(CITIES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def get_city_times(city_name):
+    cities = load_cities()
+    return cities.get(city_name, [])
 
 
 def load_user_settings():
