@@ -1,0 +1,14 @@
+[Unit]
+Description=Prayer Bot Telegram Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/prayer_bot
+ExecStart=/bin/bash /root/prayer_bot/run.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
